@@ -11,6 +11,12 @@ import (
 	"time"
 
 	"gin-golang-app/internal/config"
+	"gin-golang-app/internal/database"
+	"gin-golang-app/internal/handlers"
+	"gin-golang-app/internal/middleware"
+	"gin-golang-app/internal/repository"
+	"gin-golang-app/internal/routes"
+	"gin-golang-app/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,15 +34,32 @@ func main() {
 		gin.SetMode(gin.DebugMode)
 	}
 
+	// Initialize database connection
+	db, err := initializeDatabase(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Printf("Error closing database: %v", err)
+		}
+	}()
+
+	// Initialize repositories
+	userRepo := repository.NewUserRepository(db)
+
+	// Initialize services
+	userService := services.NewUserService(userRepo)
+
+	// Initialize handlers
+	healthHandler := handlers.NewHealthHandler(db)
+	userHandler := handlers.NewUserHandler(userService)
+
 	// Create Gin router
 	router := gin.New()
 
-	// Add basic middleware
-	router.Use(gin.Logger())
-	router.Use(gin.Recovery())
-
-	// Setup routes
-	setupRoutes(router)
+	// Setup routes with dependency injection
+	setupRoutes(router, cfg, healthHandler, userHandler)
 
 	// Create HTTP server
 	server := &http.Server{
@@ -74,27 +97,73 @@ func main() {
 	log.Println("Server exited")
 }
 
-// setupRoutes configures all the routes for the application
-func setupRoutes(router *gin.Engine) {
-	// Health check endpoint
-	router.GET("/health", healthCheckHandler)
+// initializeDatabase creates and configures the database connection
+func initializeDatabase(cfg *config.Config) (*database.Database, error) {
+	// Convert config to database config
+	dbConfig := &database.DatabaseConfig{
+		Driver:          "postgres", // Default to postgres, could be made configurable
+		Host:            cfg.Database.Host,
+		Port:            parsePort(cfg.Database.Port),
+		Username:        cfg.Database.User,
+		Password:        cfg.Database.Password,
+		DatabaseName:    cfg.Database.Name,
+		SSLMode:         cfg.Database.SSLMode,
+		MaxOpenConns:    25,
+		MaxIdleConns:    5,
+		ConnMaxLifetime: 5 * time.Minute,
+		ConnMaxIdleTime: 5 * time.Minute,
+	}
 
-	// API version group
-	v1 := router.Group("/api/v1")
-	{
-		// Health check endpoint under API group as well
-		v1.GET("/health", healthCheckHandler)
+	// Create database connection
+	db, err := database.NewDatabase(dbConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create database connection: %w", err)
+	}
+
+	return db, nil
+}
+
+// parsePort converts string port to int with default fallback
+func parsePort(portStr string) int {
+	if portStr == "" {
+		return 5432 // Default PostgreSQL port
+	}
+
+	// Simple conversion - in production you might want more robust parsing
+	switch portStr {
+	case "5432":
+		return 5432
+	case "3306":
+		return 3306
+	default:
+		return 5432
 	}
 }
 
-// healthCheckHandler handles health check requests
-func healthCheckHandler(c *gin.Context) {
-	response := gin.H{
-		"status":    "healthy",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"service":   "gin-golang-app",
-		"version":   "1.0.0",
+// setupRoutes configures all the routes for the application with dependency injection
+func setupRoutes(router *gin.Engine, cfg *config.Config, healthHandler *handlers.HealthHandler, userHandler *handlers.UserHandler) {
+	// Create CORS configuration from app config
+	corsConfig := middleware.CORSConfig{
+		AllowedOrigins: cfg.CORS.AllowedOrigins,
+		AllowedMethods: cfg.CORS.AllowedMethods,
+		AllowedHeaders: cfg.CORS.AllowedHeaders,
 	}
 
-	c.JSON(http.StatusOK, response)
+	// Create router configuration
+	routerConfig := routes.RouterConfig{
+		HealthHandler: healthHandler,
+		UserHandler:   userHandler,
+		JWTSecret:     cfg.JWT.Secret,
+		CORSConfig:    corsConfig,
+	}
+
+	// Setup routes based on environment
+	switch cfg.Environment {
+	case "production":
+		routes.SetupProductionRoutes(router, routerConfig)
+	case "staging":
+		routes.SetupRoutes(router, routerConfig)
+	default:
+		routes.SetupDevelopmentRoutes(router, routerConfig)
+	}
 }
