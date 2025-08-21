@@ -12,11 +12,7 @@ import (
 
 	"gin-golang-app/internal/config"
 	"gin-golang-app/internal/database"
-	"gin-golang-app/internal/handlers"
-	"gin-golang-app/internal/middleware"
-	"gin-golang-app/internal/repository"
-	"gin-golang-app/internal/routes"
-	"gin-golang-app/internal/services"
+	"gin-golang-app/internal/server"
 
 	"github.com/gin-gonic/gin"
 )
@@ -45,26 +41,16 @@ func main() {
 		}
 	}()
 
-	// Initialize repositories
-	userRepo := repository.NewUserRepository(db)
-
-	// Initialize services
-	userService := services.NewUserService(userRepo)
-
-	// Initialize handlers
-	healthHandler := handlers.NewHealthHandler(db)
-	userHandler := handlers.NewUserHandler(userService)
-
-	// Create Gin router
-	router := gin.New()
-
-	// Setup routes with dependency injection
-	setupRoutes(router, cfg, healthHandler, userHandler)
+	// Create server instance
+	srv, err := server.NewServer(cfg, db)
+	if err != nil {
+		log.Fatalf("Failed to create server: %v", err)
+	}
 
 	// Create HTTP server
-	server := &http.Server{
+	httpServer := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port),
-		Handler:      router,
+		Handler:      srv.Router,
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
 	}
@@ -72,7 +58,7 @@ func main() {
 	// Start server in a goroutine
 	go func() {
 		log.Printf("Starting server on %s:%s in %s mode", cfg.Server.Host, cfg.Server.Port, cfg.Environment)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
@@ -89,7 +75,7 @@ func main() {
 	defer cancel()
 
 	// Attempt graceful shutdown
-	if err := server.Shutdown(ctx); err != nil {
+	if err := httpServer.Shutdown(ctx); err != nil {
 		log.Printf("Server forced to shutdown: %v", err)
 		return
 	}
@@ -137,33 +123,5 @@ func parsePort(portStr string) int {
 		return 3306
 	default:
 		return 5432
-	}
-}
-
-// setupRoutes configures all the routes for the application with dependency injection
-func setupRoutes(router *gin.Engine, cfg *config.Config, healthHandler *handlers.HealthHandler, userHandler *handlers.UserHandler) {
-	// Create CORS configuration from app config
-	corsConfig := middleware.CORSConfig{
-		AllowedOrigins: cfg.CORS.AllowedOrigins,
-		AllowedMethods: cfg.CORS.AllowedMethods,
-		AllowedHeaders: cfg.CORS.AllowedHeaders,
-	}
-
-	// Create router configuration
-	routerConfig := routes.RouterConfig{
-		HealthHandler: healthHandler,
-		UserHandler:   userHandler,
-		JWTSecret:     cfg.JWT.Secret,
-		CORSConfig:    corsConfig,
-	}
-
-	// Setup routes based on environment
-	switch cfg.Environment {
-	case "production":
-		routes.SetupProductionRoutes(router, routerConfig)
-	case "staging":
-		routes.SetupRoutes(router, routerConfig)
-	default:
-		routes.SetupDevelopmentRoutes(router, routerConfig)
 	}
 }

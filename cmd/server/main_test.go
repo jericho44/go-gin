@@ -6,9 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"gin-golang-app/internal/config"
 	"gin-golang-app/internal/handlers"
-	"gin-golang-app/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -18,26 +16,16 @@ func TestHealthCheckHandler(t *testing.T) {
 	// Set Gin to test mode
 	gin.SetMode(gin.TestMode)
 
-	// Create test configuration
-	cfg := &config.Config{
-		Environment: "test",
-		JWT: config.JWTConfig{
-			Secret: "test-secret",
-		},
-		CORS: config.CORSConfig{
-			AllowedOrigins: []string{"*"},
-			AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-			AllowedHeaders: []string{"Content-Type", "Authorization"},
-		},
-	}
-
 	// Create mock handlers
-	healthHandler := handlers.NewHealthHandler(nil)                      // nil database for testing
-	userHandler := handlers.NewUserHandler(services.NewUserService(nil)) // nil repository for testing
+	healthHandler := handlers.NewHealthHandler(nil) // nil database for testing
 
-	// Create a new router
+	// Create a new router and set up basic routes manually for testing
 	router := gin.New()
-	setupRoutes(router, cfg, healthHandler, userHandler)
+
+	// Add basic health routes for testing
+	router.GET("/health", healthHandler.HealthCheck)
+	router.GET("/ready", healthHandler.ReadinessCheck)
+	router.GET("/live", healthHandler.LivenessCheck)
 
 	// Test the /health endpoint
 	t.Run("GET /health", func(t *testing.T) {
